@@ -4,11 +4,21 @@ import (
 	"errors"
 	"io"
 	"log"
-	"sync"
 	"syscall"
 	"time"
 	"unsafe"
 )
+
+var (
+	modws2_32   = syscall.NewLazyDLL("ws2_32.dll")
+
+	procConnect     = modws2_32.NewProc("connect")
+	procBind        = modws2_32.NewProc("bind")
+	procRecv        = modws2_32.NewProc("recv")
+	procSend        = modws2_32.NewProc("send")
+	procCloseSocket = modws2_32.NewProc("closesocket")
+)
+
 
 // Make sure Winsock2 is initialised
 func init() {
@@ -42,48 +52,14 @@ type hvsockConn struct {
 	fd     syscall.Handle
 	local  HypervAddr
 	remote HypervAddr
-
-	wg            sync.WaitGroup
-	closing       bool
-	readDeadline  time.Time
-	writeDeadline time.Time
 }
 
-// Used for async system calls
-const (
-	cFILE_SKIP_COMPLETION_PORT_ON_SUCCESS = 1
-	cFILE_SKIP_SET_EVENT_ON_HANDLE        = 2
-)
 
 var (
-	errTimeout = &timeoutError{}
-
 	wsaData syscall.WSAData
 )
 
-type timeoutError struct{}
-
-func (e *timeoutError) Error() string   { return "i/o timeout" }
-func (e *timeoutError) Timeout() bool   { return true }
-func (e *timeoutError) Temporary() bool { return true }
-
 // Main constructor
-func newHVsockConn(h syscall.Handle, local HypervAddr, remote HypervAddr) (*HVsockConn, error) {
-	ioInitOnce.Do(initIo)
-	v := &hvsockConn{fd: h, local: local, remote: remote}
-
-	_, err := createIoCompletionPort(h, ioCompletionPort, 0, 0xffffffff)
-	if err != nil {
-		return nil, err
-	}
-	err = setFileCompletionNotificationModes(h,
-		cFILE_SKIP_COMPLETION_PORT_ON_SUCCESS|cFILE_SKIP_SET_EVENT_ON_HANDLE)
-	if err != nil {
-		return nil, err
-	}
-
-	return &HVsockConn{hvsockConn: *v}, nil
-}
 
 // Utility function to build a struct sockaddr for syscalls.
 func (a HypervAddr) sockaddr(sa *rawSockaddrHyperv) (unsafe.Pointer, int32, error) {
@@ -106,7 +82,15 @@ func connect(s syscall.Handle, a *HypervAddr) (err error) {
 		return err
 	}
 
-	return sys_connect(s, ptr, n)
+	r1, _, e1 := syscall.Syscall(procConnect.Addr(), 3, uintptr(s), uintptr(ptr), uintptr(n))
+	if r1 == socket_error {
+		if e1 != 0 {
+			err = error(e1)
+		} else {
+			err = syscall.EINVAL
+		}
+	}
+	return nil
 }
 
 func bind(s syscall.Handle, a HypervAddr) error {
@@ -116,9 +100,18 @@ func bind(s syscall.Handle, a HypervAddr) error {
 		return err
 	}
 
-	return sys_bind(s, ptr, n)
+	r1, _, e1 := syscall.Syscall(procBind.Addr(), 3, uintptr(s), uintptr(ptr), uintptr(n))
+	if r1 == socket_error {
+		if e1 != 0 {
+			err = error(e1)
+		} else {
+			err = syscall.EINVAL
+		}
+	}
+	return nil
 }
 
+// XXX Untested
 func accept(s syscall.Handle, a *HypervAddr) (syscall.Handle, error) {
 	return 0, errors.New("accept(): Unimplemented")
 }
@@ -126,183 +119,76 @@ func accept(s syscall.Handle, a *HypervAddr) (syscall.Handle, error) {
 //
 // File IO/Socket interface
 //
-func (s *HVsockConn) close() error {
-	s.closeHandle()
+func newHVsockConn(h syscall.Handle, local HypervAddr, remote HypervAddr) (*HVsockConn, error) {
+	v := &hvsockConn{fd: h, local: local, remote: remote}
+	return &HVsockConn{hvsockConn: *v}, nil
+}
 
-	return nil
+func (v *HVsockConn) close() (err error) {
+	r1, _, e1 := syscall.Syscall(procCloseSocket.Addr(), 1, uintptr(v.fd), 0, 0)
+	if r1 == socket_error {
+		if e1 != 0 {
+			err = error(e1)
+		} else {
+			err = syscall.EINVAL
+		}
+	}
+	v.fd = syscall.InvalidHandle
+	return err
 }
 
 // Underlying raw read() function.
 func (v *HVsockConn) read(buf []byte) (int, error) {
-	var b syscall.WSABuf
-	var bytes uint32
-	var f uint32
-
-	b.Len = uint32(len(buf))
-	b.Buf = &buf[0]
-
-	c, err := v.prepareIo()
-	if err != nil {
-		return 0, err
+	var err error
+	ptr := unsafe.Pointer(&buf[0])
+	n := uint32(len(buf))
+	r1, _, e1 := syscall.Syscall(procRecv.Addr(), 3, uintptr(v.fd), uintptr(ptr), uintptr(n))
+	if r1 == socket_error {
+		if e1 != 0 {
+			err = error(e1)
+		} else {
+			err = syscall.EINVAL
+		}
 	}
 
-	err = syscall.WSARecv(v.fd, &b, 1, &bytes, &f, &c.o, nil)
-	n, err := v.asyncIo(c, v.readDeadline, bytes, err)
-
 	// Handle EOF conditions.
-	if err == nil && n == 0 && len(buf) != 0 {
+	if err == nil && r1 == 0 && len(buf) != 0 {
 		return 0, io.EOF
 	} else if err == syscall.ERROR_BROKEN_PIPE {
 		return 0, io.EOF
-	} else {
-		return n, err
 	}
+	return int(r1), err
 }
 
 // Underlying raw write() function.
 func (v *HVsockConn) write(buf []byte) (int, error) {
-	var b syscall.WSABuf
-	var f uint32
-	var bytes uint32
+	var err error
 
 	if len(buf) == 0 {
 		return 0, nil
 	}
 
-	f = 0
-	b.Len = uint32(len(buf))
-	b.Buf = &buf[0]
-
-	c, err := v.prepareIo()
-	if err != nil {
-		return 0, err
+	ptr := unsafe.Pointer(&buf[0])
+	n := uint32(len(buf))
+	r1, _, e1 := syscall.Syscall(procSend.Addr(), 3, uintptr(v.fd), uintptr(ptr), uintptr(n))
+	if r1 == socket_error {
+		if e1 != 0 {
+			err = error(e1)
+		} else {
+			err = syscall.EINVAL
+		}
 	}
-	err = syscall.WSASend(v.fd, &b, 1, &bytes, f, &c.o, nil)
-	return v.asyncIo(c, v.writeDeadline, bytes, err)
+	return int(r1), err
 }
 
 func (v *HVsockConn) SetReadDeadline(t time.Time) error {
-	v.readDeadline = t
-	return nil
+	return nil // FIXME
 }
 
 func (v *HVsockConn) SetWriteDeadline(t time.Time) error {
-	v.writeDeadline = t
-	return nil
+	return nil // FIXME
 }
 
 func (v *HVsockConn) SetDeadline(t time.Time) error {
-	v.SetReadDeadline(t)
-	v.SetWriteDeadline(t)
-	return nil
-}
-
-// The code below here is adjusted from:
-// https://github.com/Microsoft/go-winio/blob/master/file.go
-
-var ioInitOnce sync.Once
-var ioCompletionPort syscall.Handle
-
-// ioResult contains the result of an asynchronous IO operation
-type ioResult struct {
-	bytes uint32
-	err   error
-}
-
-type ioOperation struct {
-	o  syscall.Overlapped
-	ch chan ioResult
-}
-
-func initIo() {
-	h, err := createIoCompletionPort(syscall.InvalidHandle, 0, 0, 0xffffffff)
-	if err != nil {
-		panic(err)
-	}
-	ioCompletionPort = h
-	go ioCompletionProcessor(h)
-}
-
-func (v *hvsockConn) closeHandle() {
-	if !v.closing {
-		// cancel all IO and wait for it to complete
-		v.closing = true
-		cancelIoEx(v.fd, nil)
-		v.wg.Wait()
-		// at this point, no new IO can start
-		syscall.Close(v.fd)
-		v.fd = 0
-	}
-}
-
-// prepareIo prepares for a new IO operation
-func (s *hvsockConn) prepareIo() (*ioOperation, error) {
-	s.wg.Add(1)
-	if s.closing {
-		return nil, errSocketClosed
-	}
-	c := &ioOperation{}
-	c.ch = make(chan ioResult)
-	return c, nil
-}
-
-// ioCompletionProcessor processes completed async IOs forever
-func ioCompletionProcessor(h syscall.Handle) {
-	// Set the timer resolution to 1. This fixes a performance regression in golang 1.6.
-	timeBeginPeriod(1)
-	for {
-		var bytes uint32
-		var key uintptr
-		var op *ioOperation
-		err := getQueuedCompletionStatus(h, &bytes, &key, &op, syscall.INFINITE)
-		if op == nil {
-			panic(err)
-		}
-		op.ch <- ioResult{bytes, err}
-	}
-}
-
-// asyncIo processes the return value from ReadFile or WriteFile, blocking until
-// the operation has actually completed.
-func (v *hvsockConn) asyncIo(c *ioOperation, deadline time.Time, bytes uint32, err error) (int, error) {
-	if err != syscall.ERROR_IO_PENDING {
-		v.wg.Done()
-		return int(bytes), err
-	} else {
-		var r ioResult
-		wait := true
-		timedout := false
-		if v.closing {
-			cancelIoEx(v.fd, &c.o)
-		} else if !deadline.IsZero() {
-			now := time.Now()
-			if !deadline.After(now) {
-				timedout = true
-			} else {
-				timeout := time.After(deadline.Sub(now))
-				select {
-				case r = <-c.ch:
-					wait = false
-				case <-timeout:
-					timedout = true
-				}
-			}
-		}
-		if timedout {
-			cancelIoEx(v.fd, &c.o)
-		}
-		if wait {
-			r = <-c.ch
-		}
-		err = r.err
-		if err == syscall.ERROR_OPERATION_ABORTED {
-			if v.closing {
-				err = errSocketClosed
-			} else if timedout {
-				err = errTimeout
-			}
-		}
-		v.wg.Done()
-		return int(r.bytes), err
-	}
+	return nil // FIXME
 }
