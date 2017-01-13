@@ -15,8 +15,9 @@ let bm_guid = "3049197C-9A4E-4FBF-9367-97F792F16994"
 
 let verbose = ref 0
 
-let info fmt = Printf.ksprintf (fun s -> if !verbose > 0 then print_string s) fmt
+let info  fmt = Printf.ksprintf (fun s -> if !verbose > 0 then print_string s) fmt
 let debug fmt = Printf.ksprintf (fun s -> if !verbose > 1 then print_string s) fmt
+let trc   fmt = Printf.ksprintf (fun s -> if !verbose > 2 then print_string s) fmt
 
 (* There's anecdotal evidence that a blocking send()/recv() is slower
  * than performing non-blocking send()/recv() calls and then use
@@ -51,13 +52,22 @@ module Lwt_hvsock = Lwt_hvsock.Make(Time)(Main)
  *)
 let rec bw_rx fd msg_sz =
   let open Lwt.Infix in
-  Lwt_hvsock.read fd buf
-  >>= function
-  | 0 ->
-    Lwt.return_unit
-  | n ->
-    if !verbose > 0 then Printf.printf "Received: %d\n" n;
-    bw_rx fd msg_sz
+  Lwt.catch
+    (fun () ->
+      Lwt_hvsock.read fd (Cstruct.sub buf 0 msg_sz)
+      >>= function
+      | 0 ->
+        trc "Received: 0\n";
+        Lwt.return_unit
+      | n ->
+        trc "Received: %d\n" n;
+        bw_rx fd msg_sz
+    ) (function
+      | Unix.Unix_error(Unix.ECONNRESET, _, _) ->
+        trc "Received ECONNRESET\n";
+        Lwt.return_unit
+      | e -> Lwt.fail e
+    )
 
 (* Server:
  * accept() in an endless loop, handle a connection at a time
