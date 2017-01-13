@@ -3,6 +3,5 @@ FROM ocaml/opam:alpine
 WORKDIR /src
 VOLUME [ "/src" ]
 ADD opam .
-RUN opam pin add hvtools . -n
-RUN opam depext hvtools -y
-RUN opam install hvtools --deps-only
+ADD Makefile .
+RUN make depends

@@ -1,5 +1,5 @@
 
-.PHONY: build-in-container linux windows clean
+.PHONY: build-in-container linux windows depends clean
 
 PACKAGES=mtime mtime.os cstruct cstruct.lwt lwt lwt.unix lwt.preemptive hvsock hvsock.lwt
 
@@ -29,6 +29,11 @@ build/hvbench: hvbench.ml
 build/hvbench.exe: hvbench.ml
 	mkdir -p build
 	ocamlopt -linkall $(OFLAGS) -g -o $@ $<
+
+depends:
+	opam pin add hvtools . -n
+	opam depext hvtools -y
+	opam install hvtools --deps-only
 
 clean:
 	rm -rf build
