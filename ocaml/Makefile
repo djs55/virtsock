@@ -28,7 +28,7 @@ build/hvbench: hvbench.ml
 
 build/hvbench.exe: hvbench.ml
 	mkdir -p build
-	ocamlopt -linkall $(OFLAGS) -g -o $@ $<
+	ocamlfind ocamlopt -package "$(PACKAGES)" -thread -linkpkg $(OFLAGS) -g -o $@ $<
 
 depends:
 	opam pin add hvtools . -n
