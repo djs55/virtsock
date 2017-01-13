@@ -1,0 +1,19 @@
+opam-version: "1.2"
+name:         "hvtools"
+maintainer:   "dave@recoil.org"
+homepage:     "https://github.com/rneugeba/virtsock"
+bug-reports:  "https://github.com/rneugeba/virtsock/issues"
+dev-repo:     "git@github.com:rneugeba/virtsock.git"
+
+authors: ["David Scott" "Rolf Neugebauer"]
+depends: [
+  "ocamlfind" {build}
+  "lwt"
+  "cmdliner"
+  "logs" {>= "0.6.2"}
+  "fmt"
+  "ptime"
+  "astring"
+  "hvsock"
+]
+available: [ocaml-version >= "4.02"]
