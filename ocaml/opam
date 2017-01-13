@@ -9,10 +9,8 @@ authors: ["David Scott" "Rolf Neugebauer"]
 depends: [
   "ocamlfind" {build}
   "lwt"
-  "logs" {>= "0.6.2"}
-  "fmt"
-  "ptime"
-  "astring"
+  "cstruct"
+  "mtime"
   "hvsock"
 ]
 available: [ocaml-version >= "4.02"]

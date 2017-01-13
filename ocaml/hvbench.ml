@@ -3,13 +3,9 @@
  * This is a direct replacement for c/hvbench
  *)
 
-type address =
-  | Loopback
-  | Parent
-  | Guid of string
 type mode =
   | Server
-  | Client of address
+  | Client of Hvsock.vmid
 type test =
   | Bandwidth
   | Latency
@@ -18,6 +14,9 @@ type test =
 let bm_guid = "3049197C-9A4E-4FBF-9367-97F792F16994"
 
 let verbose = ref 0
+
+let info fmt = Printf.ksprintf (fun s -> if !verbose > 0 then print_string s) fmt
+let debug fmt = Printf.ksprintf (fun s -> if !verbose > 1 then print_string s) fmt
 
 (* There's anecdotal evidence that a blocking send()/recv() is slower
  * than performing non-blocking send()/recv() calls and then use
@@ -29,7 +28,7 @@ let opt_poll = ref false
 let buf = Cstruct.create (2 * 1024 * 1024)
 
 (* Time (in ns) to run eeach bandwidth test *)
-let bm_bw_time = 10 * 1000 * 1000 * 1000
+let bm_bw_time = 10_000_000_000L
 
 (* How many connections to make *)
 let bm_conns = 2000
@@ -73,7 +72,7 @@ let server opt_bm msg_sz =
     let lsock = Lwt_hvsock.create () in
     Lwt_hvsock.bind lsock sa;
     Lwt_hvsock.listen lsock 5;
-    Printf.printf "server: listening\n";
+    info "server: listening\n";
     let max_conn = match opt_bm with Connection -> bm_conns | _ -> 1 in
     let rec loop = function
       | 0 ->
@@ -81,7 +80,7 @@ let server opt_bm msg_sz =
       | n ->
         Lwt_hvsock.accept lsock
         >>= fun (csock, _) ->
-        Printf.printf "server: accepted\n";
+        info "server: accepted\n";
         bw_rx csock msg_sz
         >>= fun () ->
         Lwt_hvsock.close csock
@@ -93,9 +92,47 @@ let server opt_bm msg_sz =
   end
 
 let client_conn _target =
-  failwith "Client unimplemented"
-let client _target _opt_bm _opt_msgsz =
-  failwith "Client unimplemented"
+  failwith "Client connections benchmark unimplemented"
+
+let bw_tx fd msg_sz =
+  let open Lwt.Infix in
+  let to_send = Cstruct.sub buf 0 msg_sz in
+  let c = Mtime.counter () in
+  let rec loop msgs_sent =
+    if Mtime.(to_ns_uint64 @@ count c) > bm_bw_time
+    then Lwt.return msgs_sent
+    else begin
+      Lwt_cstruct.complete (Lwt_hvsock.write fd) to_send
+      >>= fun () ->
+      loop (Int64.add msgs_sent 1L)
+    end in
+  loop 0L
+  >>= fun msgs_sent ->
+  let ns = Mtime.(to_ns_uint64 @@ count c) in
+  debug "bw_tx: %Ld %Ld %Ld\n" msgs_sent 0L ns;
+  let ( ** ) = Int64.mul and ( // ) = Int64.div in
+  (* bandwidth in Mbits per second *)
+  let ms = ns // 1_000_000L in
+  let bw = 8L ** msgs_sent ** (Int64.of_int msg_sz) ** 1000L // (ms ** 1024L ** 1024L) in
+  Lwt.return bw
+
+let client target _bm msg_sz =
+  let open Lwt.Infix in
+  info "client: msg_sz=%d\n" msg_sz;
+  Lwt_main.run begin
+    let fd = Lwt_hvsock.create () in
+    let sa = {
+      Hvsock.vmid = target;
+      serviceid = bm_guid;
+    } in
+    Lwt_hvsock.connect fd sa
+    >>= fun () ->
+    info "client: connected\n";
+    bw_tx fd msg_sz
+    >>= fun bw ->
+    Printf.printf "%d %Ld\n" msg_sz bw;
+    Lwt_hvsock.close fd
+  end
 
 let _ =
   let mode = ref Server in
@@ -105,9 +142,9 @@ let _ =
     "-s", Arg.Unit (fun () -> mode := Server), "Server mode";
     "-c", Arg.String (
         function
-        | "loopback" -> mode := Client Loopback
-        | "parent"   -> mode := Client Parent
-        | guid       -> mode := Client (Guid guid)
+        | "loopback" -> mode := Client Hvsock.Loopback
+        | "parent"   -> mode := Client Hvsock.Parent
+        | guid       -> mode := Client (Hvsock.Id guid)
       ), "Client mode: 'loopback', 'parent' or '<guid>'";
     "-B", Arg.Unit (fun () -> test := Bandwidth), "Bandwidth test";
     "-L", Arg.Unit (fun () -> test := Latency), "Latency test";

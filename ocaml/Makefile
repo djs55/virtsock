@@ -1,7 +1,7 @@
 
 .PHONY: build-in-container linux windows clean
 
-PACKAGES=fmt.tty astring cstruct lwt lwt.unix lwt.preemptive hvsock hvsock.lwt
+PACKAGES=mtime mtime.os cstruct cstruct.lwt lwt lwt.unix lwt.preemptive hvsock hvsock.lwt
 
 OFLAGS=$(shell \
         ocamlfind query $(PACKAGES) -r \
