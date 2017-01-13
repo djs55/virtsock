@@ -25,6 +25,10 @@ let trc   fmt = Printf.ksprintf (fun s -> if !verbose > 2 then print_string s) f
  *)
 let opt_poll = ref false
 
+(* There's anecdotal evidence that the Lwt layer in hvsock is a problem.
+   Requesting blocking bypasses this. *)
+let blocking = ref false
+
 (* Use a static buffer for send and receive. *)
 let buf = Cstruct.create (2 * 1024 * 1024)
 
@@ -104,6 +108,31 @@ let server opt_bm msg_sz =
 let client_conn _target =
   failwith "Client connections benchmark unimplemented"
 
+let bw_tx_blocking fd msg_sz =
+  let to_send = String.make msg_sz '\000' in
+  let c = Mtime.counter () in
+  let rec loop msgs_sent =
+    if Mtime.(to_ns_uint64 @@ count c) > bm_bw_time
+    then msgs_sent
+    else begin
+      let rec aux ofs len =
+        if len > 0 then begin
+          let n = Unix.write fd to_send ofs len in
+          if n = 0 then failwith "write returned 0";
+          aux (ofs + n) (len - n)
+        end in
+      aux 0 (String.length to_send);
+      loop (Int64.add msgs_sent 1L)
+    end in
+  let msgs_sent = loop 0L in
+  let ns = Mtime.(to_ns_uint64 @@ count c) in
+  debug "bw_tx: %Ld %Ld %Ld\n" msgs_sent 0L ns;
+  let ( ** ) = Int64.mul and ( // ) = Int64.div in
+  (* bandwidth in Mbits per second *)
+  let ms = ns // 1_000_000L in
+  let bw = 8L ** msgs_sent ** (Int64.of_int msg_sz) ** 1000L // (ms ** 1024L ** 1024L) in
+  bw
+
 let bw_tx fd msg_sz =
   let open Lwt.Infix in
   let to_send = Cstruct.sub buf 0 msg_sz in
@@ -129,12 +158,18 @@ let bw_tx fd msg_sz =
 let client target _bm msg_sz =
   let open Lwt.Infix in
   info "client: msg_sz=%d\n" msg_sz;
-  Lwt_main.run begin
+  let sa = {
+    Hvsock.vmid = target;
+    serviceid = bm_guid;
+  } in
+  if !blocking then begin
+    let fd = Hvsock.create () in
+    Hvsock.connect fd sa;
+    let bw = bw_tx_blocking fd msg_sz in
+    Printf.printf "%d %Ld\n" msg_sz bw;
+    Unix.close fd
+  end else Lwt_main.run begin
     let fd = Lwt_hvsock.create () in
-    let sa = {
-      Hvsock.vmid = target;
-      serviceid = bm_guid;
-    } in
     Lwt_hvsock.connect fd sa
     >>= fun () ->
     info "client: connected\n";
@@ -161,7 +196,8 @@ let _ =
     "-C", Arg.Unit (fun () -> test := Connection), "Connection test";
     "-m", Arg.Set_int msize, "Message size in bytes";
     "-p", Arg.Set opt_poll, "Use poll instead of blocking send()/recv()";
-    "-v", Arg.Unit (fun () -> incr verbose), "Verbose output"
+    "-v", Arg.Unit (fun () -> incr verbose), "Verbose output";
+    "-blocking", Arg.Set blocking, "Use blocking I/O";
   ] (fun unexpected_arg ->
     Printf.fprintf stderr "Unexpected argument: %s\nSee -help for usage\n" unexpected_arg;
     exit 1
