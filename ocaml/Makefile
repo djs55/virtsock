@@ -1,7 +1,7 @@
 
 .PHONY: build-in-container linux windows clean
 
-PACKAGES=fmt.tty astring lwt lwt.unix hvsock hvsock.lwt
+PACKAGES=fmt.tty astring cstruct lwt lwt.unix hvsock hvsock.lwt
 
 OFLAGS=$(shell \
         ocamlfind query $(PACKAGES) -r \
@@ -24,7 +24,7 @@ windows: build/hvbench.exe
 
 build/hvbench: hvbench.ml
 	mkdir -p build
-	ocamlopt -linkall $(OFLAGS) -g -o $@ $<
+	ocamlfind ocamlopt -package "$(PACKAGES)" -thread -linkpkg $(OFLAGS) -g -o $@ $<
 
 build/hvbench.exe: hvbench.ml
 	mkdir -p build
