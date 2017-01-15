@@ -131,8 +131,7 @@ let bw_tx_blocking fd msg_sz =
 
 module Flow = Flow_lwt_hvsock.Make(Time)(Lwt_hvsock_detach)
 
-let bw_tx fd msg_sz =
-  let flow = Flow.connect fd in
+let bw_tx flow msg_sz =
   let open Lwt.Infix in
   let to_send = Cstruct.sub buf 0 msg_sz in
   let c = Mtime.counter () in
@@ -173,11 +172,12 @@ let client target _bm msg_sz =
     let fd = Flow.Hvsock.create () in
     Flow.Hvsock.connect fd sa
     >>= fun () ->
+    let flow = Flow.connect fd in
     info "client: connected\n";
-    bw_tx fd msg_sz
+    bw_tx flow msg_sz
     >>= fun bw ->
     Printf.printf "%d %Ld\n" msg_sz bw;
-    Flow.Hvsock.close fd
+    Flow.close flow
   end
 
 let _ =
