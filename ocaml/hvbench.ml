@@ -129,7 +129,10 @@ let bw_tx_blocking fd msg_sz =
   let bw = 8L ** msgs_sent ** (Int64.of_int msg_sz) ** 1000L // (ms ** 1024L ** 1024L) in
   bw
 
+module Flow = Flow_lwt_hvsock.Make(Time)(Lwt_hvsock_detach)
+
 let bw_tx fd msg_sz =
+  let flow = Flow.connect fd in
   let open Lwt.Infix in
   let to_send = Cstruct.sub buf 0 msg_sz in
   let c = Mtime.counter () in
@@ -137,9 +140,11 @@ let bw_tx fd msg_sz =
     if Mtime.(to_ns_uint64 @@ count c) > bm_bw_time
     then Lwt.return msgs_sent
     else begin
-      Lwt_cstruct.complete (Lwt_hvsock.write fd) to_send
-      >>= fun () ->
-      loop (Int64.add msgs_sent 1L)
+      Flow.write flow to_send
+      >>= function
+      | `Eof -> failwith "Eof"
+      | `Error _ -> failwith "Error"
+      | `Ok () -> loop (Int64.add msgs_sent 1L)
     end in
   loop 0L
   >>= fun msgs_sent ->
@@ -165,14 +170,14 @@ let client target _bm msg_sz =
     Printf.printf "%d %Ld\n" msg_sz bw;
     Unix.close fd
   end else Lwt_main.run begin
-    let fd = Lwt_hvsock.create () in
-    Lwt_hvsock.connect fd sa
+    let fd = Flow.Hvsock.create () in
+    Flow.Hvsock.connect fd sa
     >>= fun () ->
     info "client: connected\n";
     bw_tx fd msg_sz
     >>= fun bw ->
     Printf.printf "%d %Ld\n" msg_sz bw;
-    Lwt_hvsock.close fd
+    Flow.Hvsock.close fd
   end
 
 let _ =
