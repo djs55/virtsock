@@ -11,6 +11,8 @@ depends: [
   "lwt"
   "cstruct"
   "mtime"
+  "logs"
+  "fmt"
   "hvsock"
 ]
 available: [ocaml-version >= "4.02"]

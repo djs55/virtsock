@@ -181,6 +181,7 @@ let client target _bm msg_sz =
   end
 
 let _ =
+  Logs.set_reporter (Logs_fmt.reporter ());
   let mode = ref Server in
   let test = ref Bandwidth in
   let msize = ref (Cstruct.len buf) in
