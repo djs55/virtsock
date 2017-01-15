@@ -43,11 +43,7 @@ module Time = struct
   type 'a io = 'a Lwt.t
   let sleep = Lwt_unix.sleep
 end
-module Main = struct
-  let run_in_main = Lwt_preemptive.run_in_main
-  let run = Lwt_main.run
-end
-module Lwt_hvsock = Lwt_hvsock.Make(Time)(Main)
+module Lwt_hvsock = Lwt_hvsock.Make(Time)(Lwt_hvsock_detach)
 
 (* Bandwidth tests:
  *
