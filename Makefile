@@ -1,5 +1,5 @@
 .PHONY: build-in-container build-binaries sock_stress clean
-DEPS:=$(wildcard pkg/*.go) $(wildcard cmd/sock_stress/*.go) $(wildcard cmd/vsudd/*.go) Dockerfile.build Makefile
+DEPS:=$(wildcard pkg/*.go) $(wildcard cmd/sock_stress/*.go) $(wildcard cmd/close_test/*.go) $(wildcard cmd/vsudd/*.go) Dockerfile.build Makefile
 
 build-in-container: $(DEPS) clean
 	@echo "+ $@"
@@ -8,8 +8,9 @@ build-in-container: $(DEPS) clean
 		-v ${CURDIR}/bin:/go/src/github.com/linuxkit/virtsock/bin \
 		virtsock-build
 
-build-binaries: vsudd sock_stress
+build-binaries: vsudd sock_stress close_test
 sock_stress: bin/sock_stress.darwin bin/sock_stress.linux bin/sock_stress.exe
+close_test: bin/close_test.linux
 vsudd: bin/vsudd.linux 
 
 bin/vsudd.linux: $(DEPS)
@@ -17,6 +18,12 @@ bin/vsudd.linux: $(DEPS)
 	GOOS=linux GOARCH=amd64 \
 	go build -o $@ -buildmode pie --ldflags '-s -w -extldflags "-static"' \
 		github.com/linuxkit/virtsock/cmd/vsudd
+
+bin/close_test.linux: $(DEPS)
+	@echo "+ $@"
+	GOOS=linux GOARCH=amd64 \
+	go build -o $@ -buildmode pie --ldflags '-s -w -extldflags "-static"' \
+		github.com/linuxkit/virtsock/cmd/close_test
 
 bin/sock_stress.linux: $(DEPS)
 	@echo "+ $@"

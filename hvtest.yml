@@ -20,6 +20,7 @@ services:
     binds:
       - /usr/bin/perf:/usr/bin/perf
       - /usr/bin/sock_stress:/usr/bin/sock_stress
+      - /usr/bin/close_test:/usr/bin/close_test
       - /usr/bin/hvbench:/usr/bin/hvbench
       - /usr/bin/hvecho:/usr/bin/hvecho
       - /usr/bin/hvstress:/usr/bin/hvstress
