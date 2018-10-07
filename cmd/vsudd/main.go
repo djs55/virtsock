@@ -14,6 +14,7 @@ import (
 	"syscall"
 
 	"github.com/linuxkit/virtsock/pkg/hvsock"
+	"github.com/linuxkit/virtsock/pkg/shutdown"
 	"github.com/linuxkit/virtsock/pkg/vsock"
 )
 
@@ -180,8 +181,9 @@ func main() {
 					return // no more listening
 				}
 				log.Printf("Connection %d to: %s from: %s\n", connid, portstr, conn.RemoteAddr())
-
-				go handleOneIn(connid, conn.(vConn), usock)
+				// use the shutdown/close wrapping protocol
+				wrapped := shutdown.Open(conn)
+				go handleOneIn(connid, wrapped, usock)
 			}
 		}()
 	}
