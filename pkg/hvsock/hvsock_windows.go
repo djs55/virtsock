@@ -42,14 +42,14 @@ type rawSockaddrHyperv struct {
 
 type hvsockListener struct {
 	acceptFD syscall.Handle
-	laddr    HypervAddr
+	laddr    Addr
 }
 
 // Internal representation. Complex mostly due to asynch send()/recv() syscalls.
 type hvsockConn struct {
 	fd     syscall.Handle
-	local  HypervAddr
-	remote HypervAddr
+	local  Addr
+	remote Addr
 
 	wg            sync.WaitGroup
 	closing       bool
@@ -66,7 +66,7 @@ type deadlineHandler struct {
 }
 
 // Main constructor
-func newHVsockConn(h syscall.Handle, local HypervAddr, remote HypervAddr) (*HVsockConn, error) {
+func newHVsockConn(h syscall.Handle, local Addr, remote Addr) (*HVsockConn, error) {
 	ioInitOnce.Do(initIo)
 	v := &hvsockConn{fd: h, local: local, remote: remote}
 
@@ -86,7 +86,7 @@ func newHVsockConn(h syscall.Handle, local HypervAddr, remote HypervAddr) (*HVso
 }
 
 // Utility function to build a struct sockaddr for syscalls.
-func (a HypervAddr) sockaddr(sa *rawSockaddrHyperv) (unsafe.Pointer, int32, error) {
+func (a Addr) sockaddr(sa *rawSockaddrHyperv) (unsafe.Pointer, int32, error) {
 	sa.Family = sysAF_HYPERV
 	sa.Reserved = 0
 	for i := 0; i < len(sa.VMID); i++ {
@@ -103,7 +103,7 @@ func hvsocket(typ, proto int) (syscall.Handle, error) {
 	return syscall.Socket(sysAF_HYPERV, typ, proto)
 }
 
-func connect(s syscall.Handle, a *HypervAddr) (err error) {
+func connect(s syscall.Handle, a *Addr) (err error) {
 	var sa rawSockaddrHyperv
 	ptr, n, err := a.sockaddr(&sa)
 	if err != nil {
@@ -113,7 +113,7 @@ func connect(s syscall.Handle, a *HypervAddr) (err error) {
 	return sys_connect(s, ptr, n)
 }
 
-func bind(s syscall.Handle, a HypervAddr) error {
+func bind(s syscall.Handle, a Addr) error {
 	var sa rawSockaddrHyperv
 	ptr, n, err := a.sockaddr(&sa)
 	if err != nil {
@@ -123,7 +123,7 @@ func bind(s syscall.Handle, a HypervAddr) error {
 	return sys_bind(s, ptr, n)
 }
 
-func accept(s syscall.Handle, a *HypervAddr) (syscall.Handle, error) {
+func accept(s syscall.Handle, a *Addr) (syscall.Handle, error) {
 	var sa rawSockaddrHyperv
 	var n = int32(unsafe.Sizeof(sa))
 	fd, err := sys_accept(s, &sa, &n)
@@ -131,8 +131,8 @@ func accept(s syscall.Handle, a *HypervAddr) (syscall.Handle, error) {
 		return fd, err
 	}
 
-	// Extract a HypervAddr from sa
-	raddr := HypervAddr{}
+	// Extract a Addr from sa
+	raddr := Addr{}
 	for i := 0; i < len(raddr.VMID); i++ {
 		a.VMID[i] = sa.VMID[i]
 	}
